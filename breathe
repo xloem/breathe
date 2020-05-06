@@ -50,10 +50,13 @@ def fade_at(string1, string2, brightness1, brightness2, x, y, total_seconds = 0.
         if now - start > total_seconds:
             break
         pct = curve((now - start) / total_seconds)
-        with gift.location(x,y):
-            write(string1, string2, pct, (brightness2 - brightness1) * pct + brightness1)
+        index = random.randint(0, max(len(string1), len(string2))- 1)
+        while string1[index] == string2[index] and brightness2 == brightness1:
+            index = random.randint(0, max(len(string1), len(string2)) - 1)
+        with gift.location(x + index,y):
+            write(string1[index], string2[index], pct, (brightness2 - brightness1) * pct + brightness1)
         sys.stdout.flush()
-        time.sleep(0.1)
+        time.sleep(0.02)
     with gift.location(x,y):
         write(string1, string2, 1.0, brightness2)
         sys.stdout.flush()
