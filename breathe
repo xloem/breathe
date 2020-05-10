@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
+from dataclasses import dataclass
+
 import blessings
 import time
 import sys
 import random
 import math
-
-gift = blessings.Terminal(force_styling=True)
+import numpy as np
 
 class easing:
     def sine_in_out(percent):
@@ -14,16 +15,236 @@ class easing:
     def linear(percent):
         return percent
 
-def brightness_color(brightness):
-    colors = (gift.black, gift.dim_white, gift.white)
-    color1 = math.floor(brightness * (len(colors) - 1))
-    color2 = color1 + 1
-    brightness1 = color1 / (len(colors) - 1)
-    brightness2 = color2 / (len(colors) - 1)
-    if random.random() * (brightness2 - brightness1) + brightness1 < brightness:
-        return colors[color2]
-    else:
-        return colors[color1]
+# try to do way with more investment planning .....
+# goal: prepare for only updating characters that have updates
+# how:
+#   well, two scenarios.  slow-update and fast-update.
+#   during fast update we flicker everything.  we want the frequency
+#   at each spot to be proportional to the brightness.
+#   when we pick random spot is in two axes, kinda
+#   we don't want to overwrite same char, and randomness needs to
+#   be in right ratio.  a quick solution without pushing bounds
+#   is to know random numbers in advance.  a little messy.
+
+#      <GRRR no experience-similarity around your requested investment being preserved>
+#      <but here i go anyway, there's maybe a little now?>
+#      
+#       looking for way to not replace character same
+#       double-projection view not working
+#       end result does use spaces though
+#       we have accumulation over time
+#       for all the locations
+#       so we could say track accumulation
+#       here's another solution: update a buffer and only update screen if needd
+#       maybe good solution dunno
+#       other thing: flick a brightness whenever accumulation is unbalanced.
+#       so, for each pixel, keep track of accumulated brightness
+#       and dither it when needed.  this means any point can be dithered,
+#       just needs to be done in proper direction
+#       i prefer for this a buffer of floats
+#       we can use color too i suppose now
+
+#  let's think more on this around moving things
+# we may want things to rest between pixels smoothly
+# if we have multiple objects, draw them all
+#   okay, so each pixel might have a number of values and colors which are
+#   blended together.  so each pixel would have a vector of characters
+
+# ord('s') returns 115
+# chr(115) returns 's'
+
+class display:
+    FLOAT_BRIGHTNESS = 0
+    FLOAT_STRENGTH = 1
+    FLOAT_COUNT = 2
+
+    def __init__(self):
+        self.gift = blessings.Terminal(force_styling = True)
+        self.contexts = (
+            self.gift.fullscreen(),
+            self.gift.hidden_curser()
+        )
+        self.brightness_colors = (self.gift.black, self.gift.dim_white, self.gift.white)
+        self.display_floats = np.zeros([self.gift.width, self.gift.height, 0, display.FLOAT_COUNT])
+        self.display_characters = np.zeros([self.gift.width, self.gift.height, 0], dtype=np.int8)
+        self.display_depth = np.zeros([self.gift.width, self.gift.height], dtype=np.int32)
+        self.undrawn = set()
+        self.resize()
+
+    def __enter__(self):
+        #for context in self.contexts:
+        #    context.__enter__()
+        return self
+    def __exit__(self, type, value, traceback):
+        #for context in self.contexts:
+        #    context.__exit__()
+        return False
+
+    def resize(self):
+        shape = list(self.display_floats.shape)
+        if shape[0] == self.gift.width and shape[1] == self.gift.height:
+            return
+        shape[0] = self.gift.width
+        shape[1] = self.gift.height
+        self.display_floats.resize(shape)
+
+        shape = list(self.display_characters.shape)
+        shape[0] = self.gift.width
+        shape[1] = self.gift.height
+        self.display_characters.resize(shape)
+
+        shape = list(self.display_depth.shape)
+        shape[0] = self.gift.width
+        shape[1] = self.gift.height
+        self.display_depth.resize(shape)
+
+    def draw_changed(self):
+        content = False
+        for (x, y) in self.redraw:
+            content = context or self.draw_elements_at(x, y)
+        self.redraw.clear()
+        if not content:
+            resize()
+
+    def draw_all(self):
+        content = False
+        shape = self.display_depth.shape
+        for y in range(shape[1]):
+            for x in range(shape[0]):
+                content = context or self.draw_elements_at(x, y)
+        self.redraw.clear()
+        if not content:
+            resize()
+
+    def draw_elements_at(self, x, y):
+        depth = self.display_depth[x,y]
+        if depth == 0:
+            return False
+        sys.stdout.write(self.gift.move(x, y))
+        floats = self.display_floats[x,y,range(depth),:]
+        characters = self.dispaly_characters[x,y,range(depth)]
+        strengths = floats[:,display.FLOAT_STRENGTH]
+        strengths_total = np.sum(strengths)
+        strengths /= strengths_total
+        
+        # let's do weighted average of brightnesses
+        brightness = np.average(floats[:,display.FLOAT_BRIGHTNESS], weights=strengths)
+        character = np.random.choice(characters, p=strengths)
+
+        # now draw
+        return self.draw_element_to_stdout(character, brightness)
+
+    def clear_whole_buffer(self):
+        display_depth.fill(0)
+    
+    def draw_element_to_stdout(self, character, brightness):
+        character = chr(element[display.CHARACTER])
+        brightness = element[display.BRIGHTNESS]
+        color = self.brightness_color(brightness)
+        sys.stdout.write(color + character + self.gift.normal)
+        return color != self.brightness_colors[0] and character != ' '
+
+    def draw_element_to_buffer(self, x, y, character, brightness, strength):
+        depth = self.display_depth[x,y]
+        self.display_depth[x,y] = depth + 1
+        shape = self.display_floats.shape
+        if depth + 1 >= shape[2]:
+            shape = list(shape)
+            shape[2] = self.display_depth[x,y]
+            self.display_floats.resize(depth + 1)
+            shape = list(self.display_characters.shape)
+            shape[2] = self.display_depth[x,y]
+            self.display_characters.resize(depth + 1)
+        self.display_floats[x, y, depth] = (brightness, strength)
+        self.display_characters[x, y, depth] = character
+        self.undrawn.add((x,y))
+
+    def brightness_color(self, brightness):
+        brightnesses = len(self.brightness_colors) - 1
+        color1 = math.floor(brightness * brightnesses)
+        color2 = color1+ 1
+        brightness1 = color1 / brightnesses
+        brightness2 = color2 / brightnesses
+        if random.random() * (brightness2 - brightness1) + brightness1 < brightness:
+            return self.brightness_colors[color2]
+        else:
+            return self.brightness_colors[color1]
+#
+#    def write_faded(initial_text, final_text, percentage, brightness):
+#        for index in range(max(len(initial_text),len(final_text))):
+#            final_character = final_text[index]
+#            initial_character = initial_text[index]
+#            this_brightness = brightness
+#            if initial_character == ' ':
+#                this_brightness = percent * brightness
+#                initial_character = final_character
+#            elif character2 == ' ':
+#                this_brightness = brightness - percent * brightness
+#                final_character = initial_character
+#            if random.random() < percent:
+#                character = final_character
+#            else:
+#                character = initial_character
+#            sys.stdout.write(brightness_color(this_brightness) + character + gift.normal)
+
+class expressiveness:
+    def __init__(self):
+        self.display = display()
+        self.behaviors = []
+        self.time = time.time()
+
+    def add(self, behavior):
+        self.behaviors.append(behavior)
+        behavior.start(self.time)
+
+    def update(self):
+        self.time = time.time()
+        self.behaviors = [
+                behavior for behavior in self.behaviors
+                if behavior.update(self.display, self.time)
+        ]
+        self.display.draw_changed()
+        sys.stdout.flush()
+        self.display.clear_whole_buffer()
+
+        
+@dataclass
+class fading_behavior:
+    initial_text: str
+    final_text: str
+    initial_brightness: float
+    final_brightness: float
+    left: int
+    top: int
+    curve: object = easing.sine_in_out
+
+    total_seconds: float = 5
+    start_seconds: float = 0
+    passed_seconds: float = 0
+
+    def start(self, time):
+        self.start_seconds = time
+
+    def update(self, display, time):
+        if self.start_seconds == 0:
+            self.start_seconds = time
+        self.passed_seconds = time - self.start_seconds
+        if self.total_seconds <= self.passed_seconds:
+            return False
+        percentage = self.passed_seconds / self.total_seconds
+        for index in range(max(len(self.initial_text),len(self.final_text))):
+            initial_character = self.initial_text[index]
+            final_character = self.final_text[index]
+            initial_brightness = self.initial_brightness
+            final_brightness = self.final_brightness
+            if initial_character == ' ':
+                initial_brightness = 0
+                initial_character = final_character
+            elif final_character == ' ':
+                final_brightness =  0
+                final_character = initial_character
+            display.draw_element_to_buffer(self.left + index, self.top, initial_character, initial_brightness, 1.0 - percentage)
+            display.draw_element_to_buffer(self.left + index, self.top, final_character, final_brightness, percentage)
 
 def write(string1, string2, percent, brightness):
     for index in range(max(len(string1),len(string2))):
@@ -91,8 +312,16 @@ secondary = [
         'Notice the environment around you'
         ]
 
-with gift.fullscreen():
-    with gift.hidden_cursor():
+expressions = expressiveness()
+with expressions.display:
+    expressions.add(fading_behavior('Breathe in ', 'Breathe out', 0, 1, 5, 5))
+    while True:
+        expressions.update()
+        time.sleep(0.05)
+
+
+
+if False:
         scale = 1.0
         breathe_in_time = 7
         breathe_out_time = 10
@@ -107,6 +336,7 @@ with gift.fullscreen():
             fade_between('Breathe ou ', 'Breathe out', 1, 1, breathe_in_time / 4)
             fade('Breathe out', 1, 0, breathe_out_time)
 
-            #breathe_in_time = (breathe_in_time + breathe_out_time) / 2
-            breathe_in_time = breathe_in_time * 1.05
-            breathe_out_time = breathe_out_time * 1.05
+            breathe_in_time = (breathe_in_time + breathe_out_time) / 2
+            #breathe_in_time = breathe_in_time * 1.05
+            breathe_in_time = breathe_in_time + 0.4
+            breathe_out_time = breathe_out_time + 0.5
